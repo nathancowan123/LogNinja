@@ -1,0 +1,21 @@
+# Ignore large model files
+app/model/ninja_model/*.bin
+app/model/ninja_model/*.safetensors
+app/model/ninja_model/logs/*
+app/model/ninja_model/log_ninja_trained/*
+app/model/ninja_model/*.onnx
+app/model/ninja_model/*.ckpt
+
+# Ignore virtual environments & cache
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# Ignore config & env files (if needed)
+.env
+
+# Ignore logs
+logs/
+docker-compose.override.yml
