@@ -1,0 +1,11 @@
+version: "3.8"
+
+services:
+  log_ninja:
+    build: .
+    container_name: log_ninja_core
+    ports:
+      - "8100:8100"
+    volumes:
+      - ./logs:/app/logs
+    restart: always
