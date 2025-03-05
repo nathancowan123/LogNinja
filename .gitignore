@@ -12,6 +12,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.log
+*.db
 
 # Ignore config & env files (if needed)
 .env
