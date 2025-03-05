@@ -2,96 +2,75 @@ import os
 import time
 import threading
 import logging
-import shutil
-import psutil  # To check RAM usage
 from pathlib import Path
 from app.services.ninja_actions import get_ninja_action
 from colorama import Fore, Style, init
 
-# Initialize colorama for colors
+# 🛠 Initialize colorama for colored console output
 init(autoreset=True)
 
-LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
-FILE_SIZE_LIMIT = 100 * 1024 * 1024  # 100MB
-INACTIVITY_THRESHOLD = 180  # 3 minutes
-RAM_THRESHOLD_PERCENT = 80  # Clear cache if RAM usage exceeds 80%
-FREE_RAM_THRESHOLD_MB = 1024  # Clear if free RAM drops below 1GB
-
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+# ✅ Ensure Logging is Configured Once
+LOG_FILE = "logs/system_monitor.log"
 logger = logging.getLogger("LogNinja")
+if not logger.hasHandlers():  # ✅ Prevent duplicate logging setups
+    file_handler = logging.FileHandler(LOG_FILE)
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.setLevel(logging.INFO)
+
+# ✅ Global thread and lock to prevent duplicate cleanup processes
+log_cleanup_thread = None
+log_cleanup_lock = threading.Lock()
 
 class NinjaLogManager:
-    """🥷 Manages log cleaning, cache clearing, and system optimization."""
-    
+    """🥷 Handles log cleanup and ninja-themed actions."""
+
     def __init__(self):
-        self.last_action_time = time.time()
+        self.logs_dir = Path(__file__).resolve().parent.parent / "logs"
+        self.file_size_limit = 100 * 1024 * 1024  # 100MB
+        self.ninja_action_interval = 180  # Every 3 minutes
 
     def delete_large_logs(self):
-        """⚔️ Deletes logs ≥ 100MB."""
+        """⚔️ Deletes logs ≥ 100MB to free space."""
+        logger.info("🛠 Checking log file sizes...")
         deleted_files = []
-        if LOGS_DIR.exists():
-            for filename in os.listdir(LOGS_DIR):
-                file_path = LOGS_DIR / filename
-                if file_path.suffix == ".log" and file_path.is_file():
-                    file_size = file_path.stat().st_size
-                    if file_size >= FILE_SIZE_LIMIT:
-                        file_path.unlink()
-                        deleted_files.append({"file": filename, "size_mb": round(file_size / (1024 * 1024), 2)})
-        
+
+        if self.logs_dir.exists():
+            for log_file in self.logs_dir.glob("*.log"):
+                if log_file.stat().st_size >= self.file_size_limit:
+                    log_file.unlink()
+                    deleted_files.append(log_file.name)
+
         if deleted_files:
-            logger.info(f"{Fore.RED}🥷⚡ {len(deleted_files)} bloated logs SLASHED! ⚔️🔥{Style.RESET_ALL}")
-            for f in deleted_files:
-                logger.info(f"{Fore.YELLOW}📜 {f['file']} | 💾 {f['size_mb']} MB [Erased!]{Style.RESET_ALL}")
-        
+            logger.info(f"🔥 Deleted {len(deleted_files)} large logs: {', '.join(deleted_files)}")
         return deleted_files
 
-    def check_and_clear_ram_cache(self):
-        """🧹 Checks RAM usage and clears cache if necessary."""
-        ram = psutil.virtual_memory()
-        used_percent = ram.percent
-        free_mb = ram.available / (1024 * 1024)  # Convert bytes to MB
-
-        if used_percent > RAM_THRESHOLD_PERCENT or free_mb < FREE_RAM_THRESHOLD_MB:
-            logger.info(f"{Fore.RED}💾 RAM usage high ({used_percent}%) or free RAM low ({free_mb:.2f}MB). Clearing cache...{Style.RESET_ALL}")
-            self.clear_ram_cache()
-        else:
-            logger.info(f"{Fore.GREEN}💾 RAM usage at {used_percent}% ({free_mb:.2f}MB free). No action needed.{Style.RESET_ALL}")
-
-    def clear_ram_cache(self):
-        """⚡ Clears RAM cache based on the OS."""
-        try:
-            if os.name == "posix":  # Linux & macOS
-                os.system("sync; echo 3 > /proc/sys/vm/drop_caches")
-                logger.info(f"{Fore.CYAN}🧹 Log Ninja purged the system cache! ⚔️💨{Style.RESET_ALL}")
-            elif os.name == "nt":  # Windows
-                import ctypes
-                ctypes.windll.psapi.EmptyWorkingSet(-1)
-                logger.info(f"{Fore.CYAN}🧹 Log Ninja cleared Windows standby memory! ⚔️💨{Style.RESET_ALL}")
-            else:
-                logger.warning(f"{Fore.YELLOW}⚠️ Cache clearing is not supported on this OS.{Style.RESET_ALL}")
-        except Exception as e:
-            logger.error(f"{Fore.RED}❌ Failed to clear cache: {e}{Style.RESET_ALL}")
-
-    def monitor_logs(self):
-        """📜 Monitors logs, RAM, and updates ninja status."""
-        while True:
-            deleted_files = self.delete_large_logs()
-            self.check_and_clear_ram_cache()
-            current_time = time.time()
-
-            if not deleted_files:
-                time_since_last_action = current_time - self.last_action_time
-                if time_since_last_action > INACTIVITY_THRESHOLD:
-                    self.ninja_takes_break()
-                else:
-                    logger.info(f"{Fore.GREEN}🕵️‍♂️ No logs detected... Ninja rests. 💤{Style.RESET_ALL}")
-
-            time.sleep(30)  # ✅ Runs every 30 seconds
-
     def ninja_takes_break(self):
-        """⏳ Uses AI to generate ninja actions dynamically."""
+        """🎭 Logs AI-generated ninja actions dynamically every few minutes."""
         actions = get_ninja_action()
         for action in actions:
             logger.info(f"{Fore.CYAN}{action}{Style.RESET_ALL}")
 
+    def log_cleanup_loop(self):
+        """📜 Runs log cleanup and ninja messages in the background."""
+        logger.info("🚀 Log Cleanup & Ninja Actions Started!")
+
+        while True:
+            self.delete_large_logs()
+            self.ninja_takes_break()
+            time.sleep(self.ninja_action_interval)  # Wait 3 minutes before logging ninja actions
+
+# ✅ Define `log_manager`
 log_manager = NinjaLogManager()
+
+def start_ninja_log_cleanup():
+    """🚀 Starts log cleanup & ninja actions in a separate thread."""
+    global log_cleanup_thread
+    with log_cleanup_lock:
+        if log_cleanup_thread is None or not log_cleanup_thread.is_alive():
+            log_cleanup_thread = threading.Thread(target=log_manager.log_cleanup_loop, daemon=True)
+            log_cleanup_thread.start()
+            logger.info("🚀 Log Cleanup Running in the Background!")
+        else:
+            logger.info("⚠️ Log cleanup is already running. No duplicate threads started.")
