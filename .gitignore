@@ -1,22 +1,66 @@
-# Ignore large model files
+# Ignore large model files and training artifacts
 app/model/ninja_model/*.bin
 app/model/ninja_model/*.safetensors
 app/model/ninja_model/logs/*
 app/model/ninja_model/log_ninja_trained/*
 app/model/ninja_model/*.onnx
 app/model/ninja_model/*.ckpt
+app/model/ninja_model/*.tflite
+app/model/ninja_model/*.h5
+app/model/ninja_model/*.tar.gz
+app/model/ninja_model/checkpoints/
 
-# Ignore virtual environments & cache
+# Ignore virtual environments & Python cache
 venv/
 __pycache__/
 *.pyc
 *.pyo
-*.log
-*.db
-
-# Ignore config & env files (if needed)
-.env
+*.pyd
+*.egg-info/
+dist/
+build/
 
 # Ignore logs
 logs/
+logs/*
+*.log
+*.out
+nohup.out
+*.bak
+
+# Ignore database and generated files
+db/*.db
+db/*.db-journal
+db/migrations/
+
+# Ignore Flask & Gunicorn logs
+gunicorn.log
+gunicorn-error.log
+gunicorn-access.log
+
+# Ignore Supervisor logs
+supervisor_err.log
+supervisor_out.log
+
+# Ignore temporary or debug files
+*.swp
+*.swo
+*.tmp
+*.bak
+*.swp
+*.orig
+*.old
+
+# Ignore compiled Cython or Jupyter notebooks
+*.so
+*.ipynb_checkpoints/
+
+# Ignore Docker-specific overrides
 docker-compose.override.yml
+
+# Ignore config & environment files (if needed)
+.env
+*.env
+secrets.json
+config/*.yaml
+config/settings.py
