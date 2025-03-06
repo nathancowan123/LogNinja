@@ -1,4 +1,5 @@
 import redis
+import sqlite3
 import json
 from flask import Blueprint, jsonify, request
 
@@ -7,16 +8,20 @@ redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=T
 
 logs_bp = Blueprint("logs", __name__)
 
-@logs_bp.route("/logs", methods=["GET"])
+@logs_bp.route("/", methods=["GET"])
 def get_logs():
-    """Fetch latest logs from Redis."""
-    limit = request.args.get("limit", 10)  # Get limit from request
+    """Fetch latest logs from SQLite for long-term storage."""
+    limit = request.args.get("limit", 10)
+
     try:
         limit = int(limit)  # Ensure limit is an integer
     except ValueError:
         return jsonify({"error": "Invalid limit parameter. Must be an integer."}), 400
 
-    logs = redis_client.lrange("logninja_logs", -limit, -1)  # Get last 'limit' logs
-    formatted_logs = [json.loads(log) for log in logs]  # Ensure proper JSON
+    conn = sqlite3.connect("db/logninja.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT timestamp, level, message FROM logs ORDER BY timestamp DESC LIMIT ?", (limit,))
+    logs = [{"timestamp": row[0], "level": row[1], "message": row[2]} for row in cursor.fetchall()]
+    conn.close()
 
-    return jsonify({"logs": formatted_logs})  # ✅ Always return a JSON object
+    return jsonify({"logs": logs})  # ✅ Ensure JSON response
