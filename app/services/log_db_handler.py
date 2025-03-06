@@ -1,83 +1,47 @@
+import redis
 import sqlite3
-import time
-import os
 import json
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+import time
+import threading
 
-LOG_DIR = "logs/"
+# ✅ Connect to Redis
+redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+
+# ✅ SQLite Database Path
 DB_PATH = "db/logninja.db"
 
-LOG_TABLES = {
-    "logninja.log": "main_logs",
-    "errors.log": "errors",
-    "ratelimits.log": "ratelimits",
-    "unauthorized.log": "unauthorized"
-}
-
-class LogHandler(FileSystemEventHandler):
-    """Handles log file changes and inserts them into SQLite3."""
+def setup_database():
+    """Creates the logs table in SQLite if it doesn't already exist."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
-    def __init__(self, db_path):
-        self.db_path = db_path
-        self.last_positions = {log: 0 for log in LOG_TABLES}  # Track file positions
-        self.setup_db()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            level TEXT,
+            message TEXT
+        )
+    """)
 
-    def setup_db(self):
-        """Creates tables for each log category."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        for table in LOG_TABLES.values():
-            cursor.execute(f"""
-                CREATE TABLE IF NOT EXISTS {table} (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT,
-                    level TEXT,
-                    source TEXT,
-                    message TEXT
-                )
-            """)
-        conn.commit()
-        conn.close()
+    conn.commit()
+    conn.close()
 
-    def process_log_entry(self, log_file, entry):
-        """Parses log entry and stores it in SQLite."""
-        try:
-            parts = entry.strip().split(" ", 3)
-            if len(parts) < 4:
-                return  # Ignore malformed logs
+def store_logs():
+    """Continuously fetch logs from Redis and store them in SQLite."""
+    while True:
+        log_data = redis_client.lpop("logninja_logs")  # Fetch the oldest log
+        if log_data:
+            log_entry = json.loads(log_data)
 
-            timestamp, source, level, message = parts
-            table = LOG_TABLES.get(log_file, "main_logs")
-
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            cursor.execute(f"INSERT INTO {table} (timestamp, source, level, message) VALUES (?, ?, ?, ?)", 
-                           (timestamp, source, level, message))
+            cursor.execute("INSERT INTO logs (level, message) VALUES (?, ?)", 
+                           (log_entry["level"], log_entry["message"]))
             conn.commit()
             conn.close()
-        except Exception as e:
-            print(f"❌ Error processing log: {e}")
+        
+        time.sleep(2)  # ✅ Fetch logs every 2 seconds to prevent high CPU usage
 
-    def on_modified(self, event):
-        """Triggered when log files are updated."""
-        log_file = os.path.basename(event.src_path)
-        if log_file in LOG_TABLES:
-            with open(event.src_path, "r") as file:
-                file.seek(self.last_positions[log_file])
-                for line in file:
-                    self.process_log_entry(log_file, line)
-                self.last_positions[log_file] = file.tell()  # Update read position
-
-def start_log_monitor():
-    """Starts log monitoring in a background thread."""
-    event_handler = LogHandler(DB_PATH)
-    observer = Observer()
-    observer.schedule(event_handler, path=LOG_DIR, recursive=False)
-    observer.start()
-    try:
-        while True:
-            time.sleep(2)  # Polling interval
-    except KeyboardInterrupt:
-        observer.stop()
-    observer.join()
+# ✅ Only setup database once
+setup_database()

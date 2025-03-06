@@ -1,14 +1,17 @@
 import threading
 import logging
-import os
 import sys
+import redis
+import json
 from flask import Flask
-from app.routes.blueprints import register_blueprints
-from app.services.system_monitor import run_system_monitor
-from app.services.log_db_handler import start_log_monitor  # ✅ Import log monitor
+from app.services.system_monitor import run_system_monitor  # ✅ Import system monitor
+from app.services.log_db_handler import store_logs  # ✅ Import log worker
 from app.extensions import limiter
 from app.security import security_checks, log_requests
-from config.log_config import error_logger, ratelimit_logger, unauthorized_logger, main_logger
+from config.log_config import error_logger, main_logger
+
+# ✅ Connect to Redis
+redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
 
 logger = logging.getLogger("main")
 
@@ -18,9 +21,6 @@ def create_app():
 
     # ✅ Initialize Flask-Limiter
     limiter.init_app(app)
-
-    # ✅ Register all blueprints (API routes) centrally
-    register_blueprints(app)
 
     # ✅ Security Middleware
     app.before_request(security_checks)
@@ -36,7 +36,7 @@ def create_app():
 
     app.logger.setLevel(logging.INFO)
 
-    # ✅ Start System Monitoring (Runs Once)
+    # ✅ Start System Monitoring
     def start_monitoring():
         if any(thread.name == "SystemMonitorThread" for thread in threading.enumerate()):
             logger.info("⚠️ System Monitoring is already running.")
@@ -47,15 +47,23 @@ def create_app():
 
     start_monitoring()
 
-    # ✅ Start Log Monitoring (Runs Once)
+    # ✅ Start Log Processing in the Background
     def start_log_processing():
         if any(thread.name == "LogMonitorThread" for thread in threading.enumerate()):
             logger.info("⚠️ Log Monitor is already running.")
         else:
-            log_thread = threading.Thread(target=start_log_monitor, daemon=True, name="LogMonitorThread")
+            log_thread = threading.Thread(target=store_logs, daemon=True, name="LogMonitorThread")
             log_thread.start()
             logger.info("📡 Log Monitor Started!")
 
     start_log_processing()
+
+    # ✅ Add a simple home route
+    @app.route("/")
+    def home():
+        log_entry = {"level": "INFO", "message": "Home route accessed!"}
+        redis_client.rpush("logninja_logs", json.dumps(log_entry))
+        redis_client.publish("logninja_stream", json.dumps(log_entry))
+        return "LogNinja is running!"
 
     return app

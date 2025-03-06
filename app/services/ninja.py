@@ -10,7 +10,16 @@ from colorama import Fore, Style, init
 init(autoreset=True)
 
 # ✅ Ensure Logging is Configured Once
-LOG_FILE = "logs/system_monitor.log"
+LOG_FILE = "/home/bruce/Projects/LogNinja-Core/logs/system_monitor.log"
+LOG_DIR = os.path.dirname(LOG_FILE)
+
+# Create log directory and file if they do not exist
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+
+if not os.path.exists(LOG_FILE):
+    open(LOG_FILE, 'w').close()
+
 logger = logging.getLogger("LogNinja")
 if not logger.hasHandlers():  # ✅ Prevent duplicate logging setups
     file_handler = logging.FileHandler(LOG_FILE)

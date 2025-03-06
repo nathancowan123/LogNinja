@@ -26,7 +26,7 @@ def run_api_monitor():
             logger.debug("🔄 Checking API Rate Limits...")  # ✅ Debug log
 
             api_name = "ExampleAPI"
-            max_requests = 1000  # ✅ Replace with actual API quota
+            max_requests = 10000  # ✅ Replace with actual API quota
             used_requests = 850   # ✅ Replace with real API data
 
             check_api_rate_limits(api_name, max_requests, used_requests)
