@@ -25,12 +25,12 @@ def start_monitoring_services():
     """Ensures all monitoring services start safely without duplicates."""
     from app.services.api_monitor import start_api_monitor
     from app.services.network_monitor import start_network_monitor
-    from app.services.system_monitor import run_system_monitor  # ✅ Fixed missing import
+    from app.services.system_monitor import start_monitoring  # ✅ Fixed missing import
 
     monitoring_threads = [
         ("ApiMonitorThread", start_api_monitor),
         ("NetworkMonitorThread", start_network_monitor),
-        ("SystemMonitorThread", run_system_monitor)
+        ("SystemMonitorThread", start_monitoring)
     ]
 
     for thread_name, func in monitoring_threads:

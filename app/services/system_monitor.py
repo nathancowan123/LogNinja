@@ -4,26 +4,32 @@ import time
 import redis
 import json
 import threading
-import subprocess
-from app.utils.logger import log_message
-from app.services.docker_monitor import run_docker_monitor
-from app.services.api_monitor import run_api_monitor  # ✅ Fixed import
+from collections import deque
 
 # 🚀 CONFIGURATION
-CRITICAL_TEMP = 85  # Logging threshold
-EMERGENCY_TEMP = 101  # Immediate reboot threshold
-MONITOR_INTERVAL = 10  # Check system every X seconds
-SHUTDOWN_DELAY = 15  # Seconds before reboot after hitting CRITICAL_TEMP
+CRITICAL_TEMP = 85  # Alert at 85°C
+EMERGENCY_TEMP = 90  # Shutdown at 90°C
+MONITOR_INTERVAL = 5  # System check every 5 sec
+ANOMALY_HISTORY = 900  # Store last 15 min of data (900 sec)
+CPU_THROTTLE_LIMIT = 85  # Throttle CPU if above 85%
+RAM_THROTTLE_LIMIT = 90  # Free memory if above 90%
+
 rebooting = False  # Prevent multiple reboots
+running = True  # Flag for monitoring
 
 # ✅ Connect to Redis
 redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
 
+# ✅ Store historical system data for trend analysis
+cpu_history = deque(maxlen=ANOMALY_HISTORY // MONITOR_INTERVAL)
+temp_history = deque(maxlen=ANOMALY_HISTORY // MONITOR_INTERVAL)
+ram_history = deque(maxlen=ANOMALY_HISTORY // MONITOR_INTERVAL)
+
 def publish_log(level, message):
-    """Publishes logs to Redis for real-time monitoring and stores in history."""
+    """Publishes logs to Redis for real-time monitoring and immutable storage."""
     log_entry = {"level": level, "message": message, "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")}
-    redis_client.rpush("logninja_logs", json.dumps(log_entry))  # Store in Redis list
-    redis_client.publish("logninja_stream", json.dumps(log_entry))  # Publish to Pub/Sub
+    redis_client.rpush("logninja_logs", json.dumps(log_entry))
+    redis_client.publish("logninja_stream", json.dumps(log_entry))
 
 def get_cpu_temp():
     """Retrieve CPU temperature (Linux/macOS)."""
@@ -33,87 +39,75 @@ def get_cpu_temp():
     except Exception:
         return -1
 
-def get_system_uptime():
-    """Returns system uptime in seconds."""
-    return int(time.time() - psutil.boot_time())
+def throttle_system():
+    """Dynamically reduce CPU priority and limit processes before reaching failure state."""
+    publish_log("warning", "⚠️ Engaging auto-throttling mechanisms.")
+    os.system("sudo cpufreq-set -g powersave")  # Reduce CPU frequency
+    os.system("sudo renice -n 19 -p $(pgrep -d' ' python)")  # Lower priority of LogNinja process
 
-def get_load_average():
-    """Returns the system's 1-minute load average."""
-    return os.getloadavg()[0]
+def kill_high_usage_processes():
+    """Find and kill high CPU or memory usage processes."""
+    for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+        if proc.info['cpu_percent'] > CPU_THROTTLE_LIMIT or proc.info['memory_percent'] > RAM_THROTTLE_LIMIT:
+            publish_log("critical", f"❌ Killing process {proc.info['name']} (PID: {proc.info['pid']}) for excessive resource usage.")
+            os.system(f"sudo kill -9 {proc.info['pid']}")
 
-def check_cpu_status():
-    """Monitor CPU usage and detect high usage conditions."""
-    cpu_usage = psutil.cpu_percent(interval=1)
-    publish_log("info", f"🖥 CPU Usage: {cpu_usage}%")
-    if cpu_usage > 80:
-        publish_log("warning", f"🔥 High CPU Usage Detected: {cpu_usage}%")
+def emergency_shutdown():
+    """Triggers an emergency safe shutdown if thresholds are exceeded."""
+    global rebooting
+    if not rebooting:
+        rebooting = True
+        publish_log("critical", "💀 EMERGENCY TEMP REACHED! Initiating shutdown...")
+        os.system("reboot now")
 
-def check_memory_status():
-    """Monitor memory usage and detect high RAM usage or swap reliance."""
-    memory_info = psutil.virtual_memory()
-    swap_info = psutil.swap_memory()
-    publish_log("info", f"💾 RAM Usage: {memory_info.percent}% ({memory_info.available // (1024 * 1024)} MB Free)")
-    publish_log("info", f"🔄 Swap Usage: {swap_info.percent}% ({swap_info.free // (1024 * 1024)} MB Free)")
-    if memory_info.percent > 85:
-        publish_log("warning", f"🚨 High Memory Usage: {memory_info.percent}% used!")
-    if swap_info.percent > 50:
-        publish_log("warning", f"⚠️ High Swap Usage: {swap_info.percent}% used!")
+def monitor_system():
+    """Real-time anomaly detection & auto-recovery."""
+    global running, rebooting
+    while running:
+        cpu_usage = psutil.cpu_percent(interval=1)
+        cpu_temp = get_cpu_temp()
+        ram_usage = psutil.virtual_memory().percent
+        disk_usage = psutil.disk_usage("/").percent
 
-def check_disk_status():
-    """Monitor disk usage and detect critical storage issues."""
-    disk_usage = psutil.disk_usage('/')
-    publish_log("info", f"🗄 Disk Usage: {disk_usage.percent}% ({disk_usage.free // (1024 * 1024 * 1024)} GB Free)")
-    if disk_usage.percent > 90:
-        publish_log("warning", f"🚨 Low Disk Space: {disk_usage.percent}% used!")
+        cpu_history.append(cpu_usage)
+        temp_history.append(cpu_temp)
+        ram_history.append(ram_usage)
 
-def log_system_metrics():
-    """Logs system metrics (CPU, RAM, Network, Disk) and checks for anomalies."""
-    cpu_usage = psutil.cpu_percent(interval=1)
-    ram_usage = psutil.virtual_memory().percent
-    net_io = psutil.net_io_counters()
-    net_sent = net_io.bytes_sent
-    net_recv = net_io.bytes_recv
-    disk_usage = psutil.disk_usage("/").percent
-    disk_free = psutil.disk_usage("/").free // (1024 * 1024 * 1024)  # Convert to GB
-    hostname = os.uname().nodename
-    uptime = get_system_uptime()
-    load_avg = get_load_average()
+        publish_log("info", f"🔥 CPU: {cpu_usage}% | 🌡 Temp: {cpu_temp}°C | 💾 RAM: {ram_usage}% | 📂 Disk: {disk_usage}%")
 
-    metrics = {
-        "cpu": cpu_usage,
-        "ram": ram_usage,
-        "net_sent": net_sent,
-        "net_recv": net_recv,
-        "disk_usage": disk_usage,
-        "disk_free": disk_free,
-        "hostname": hostname,
-        "uptime": uptime,
-        "load_avg": load_avg,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-    }
-    redis_client.set("logninja_system_metrics", json.dumps(metrics))  # ✅ Store latest metrics
-    redis_client.publish("logninja_system_stream", json.dumps(metrics))  # ✅ Publish live updates
+        if len(cpu_history) >= 10:
+            avg_cpu = sum(cpu_history) / len(cpu_history)
+            avg_temp = sum(temp_history) / len(temp_history)
+            avg_ram = sum(ram_history) / len(ram_history)
 
-def handle_anomalies(cpu_usage, ram_usage, network_spike):
-    """Handle system anomalies and take necessary action."""
-    if cpu_usage > 90 or ram_usage > 90:
-        publish_log("critical", f"🚨 Critical Resource Usage! CPU: {cpu_usage}%, RAM: {ram_usage}%")
-        os.system("sudo systemctl restart logninja")
-    if network_spike:
-        publish_log("warning", "🚨 Potential DDoS Detected! Taking action...")
-        os.system("sudo iptables -A INPUT -s <Suspicious IP> -j DROP")  # Replace <Suspicious IP>
+            if cpu_usage > avg_cpu * 1.5:
+                publish_log("warning", f"🚨 CPU Spike! Current: {cpu_usage}% | 15-min Avg: {avg_cpu:.2f}%")
+            if ram_usage > avg_ram * 1.5:
+                publish_log("warning", f"🚨 RAM Spike! Current: {ram_usage}% | 15-min Avg: {avg_ram:.2f}%")
+            if cpu_temp > avg_temp * 1.3:
+                publish_log("warning", f"🔥 Temp Spike! Current: {cpu_temp}°C | 15-min Avg: {avg_temp:.2f}°C")
 
-def run_system_monitor():
-    """Run the core system monitoring process in a loop."""
-    publish_log("info", "🚀 System Monitor Started!")
-    while True:
-        log_system_metrics()
-        check_cpu_status()
-        check_memory_status()
-        check_disk_status()
-        run_docker_monitor()  # ✅ Logs running Docker containers
-        run_api_monitor()  # ✅ Logs API activity
+        if cpu_usage > CPU_THROTTLE_LIMIT:
+            publish_log("warning", "🚨 High CPU Usage! Activating auto-throttling...")
+            throttle_system()
+            kill_high_usage_processes()
+        if ram_usage > RAM_THROTTLE_LIMIT:
+            publish_log("warning", "🚨 High RAM Usage! Freeing up memory and killing processes...")
+            os.system("sync; echo 3 > /proc/sys/vm/drop_caches")
+            kill_high_usage_processes()
+        if cpu_temp >= CRITICAL_TEMP:
+            publish_log("critical", f"⚠️ CPU Temp Critical at {cpu_temp}°C! Stopping non-essential services...")
+            os.system("sudo systemctl stop non_essential_services")
+        if cpu_temp >= EMERGENCY_TEMP:
+            emergency_shutdown()
+
         time.sleep(MONITOR_INTERVAL)
 
+def start_monitoring():
+    """Starts system monitoring in a separate thread."""
+    publish_log("info", "🚀 LogNinja System Monitoring Started!")
+    monitoring_thread = threading.Thread(target=monitor_system, daemon=True)
+    monitoring_thread.start()
+
 if __name__ == "__main__":
-    run_system_monitor()
+    start_monitoring()

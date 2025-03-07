@@ -4,7 +4,7 @@ import sys
 import redis
 import json
 from flask import Flask
-from app.services.system_monitor import run_system_monitor  # ✅ Import system monitor
+from app.services.system_monitor import start_monitoring  # ✅ Updated import
 from app.services.log_db_handler import store_logs  # ✅ Import log worker
 from app.extensions import limiter
 from app.security import security_checks, log_requests
@@ -42,15 +42,15 @@ def create_app():
     app.logger.setLevel(logging.INFO)
 
     # ✅ Start System Monitoring
-    def start_monitoring():
+    def start_system_monitor():
         if any(thread.name == "SystemMonitorThread" for thread in threading.enumerate()):
             logger.info("⚠️ System Monitoring is already running.")
         else:
-            monitoring_thread = threading.Thread(target=run_system_monitor, daemon=True, name="SystemMonitorThread")
+            monitoring_thread = threading.Thread(target=start_monitoring, daemon=True, name="SystemMonitorThread")
             monitoring_thread.start()
             logger.info("🚀 System Monitoring Started!")
 
-    start_monitoring()
+    start_system_monitor()
 
     # ✅ Start Log Processing in the Background
     def start_log_processing():

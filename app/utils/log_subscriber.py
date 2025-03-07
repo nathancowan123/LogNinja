@@ -1,12 +1,20 @@
 import redis
 import json
 import time
+import re
 
 redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
 
+def extract_temp(message):
+    """Extracts numeric temperature from a message string."""
+    match = re.search(r"(\d+(\.\d+)?)°C", message)
+    if match:
+        return float(match.group(1))  # ✅ Extracts numeric value
+    return None  # ✅ Returns None if no match
+
 def start_log_subscriber():
     """Listens for logs from Redis and prints them to the console."""
-    print("📡 Listening for live logs... (Press CTRL+C to stop)")
+    print("📡 Listening for live logs & alerts... (Press CTRL+C to stop)")
     pubsub = redis_client.pubsub()
     pubsub.subscribe("logninja_stream")  # ✅ Listen for log updates
 
@@ -18,11 +26,18 @@ def start_log_subscriber():
                 level = log_data.get("level", "INFO").upper()
                 msg = log_data.get("message", "No message provided.")
 
-                print(f"📝 [{timestamp}] [{level}] {msg}")
+                # ✅ Extract CPU temp safely
+                temp_value = extract_temp(msg)
+                if temp_value is not None:
+                    print(f"🔥 [{timestamp}] [CPU TEMP] {msg} (Parsed Temp: {temp_value}°C)")
 
-                # ✅ Specifically log CPU Temperature separately
-                if "CPU Temp" in msg:
-                    print(f"🔥 [{timestamp}] CPU Temperature Logged: {msg}")
+                    # ✅ **React to Critical Temperature**
+                    if temp_value >= 95:
+                        print(f"🚨 CRITICAL: CPU TEMP TOO HIGH ({temp_value}°C)! Consider throttling or shutdown.")
+                        redis_client.publish("logninja_alert_stream", json.dumps({"alert": f"Critical CPU Temp: {temp_value}°C"}))
+
+                else:
+                    print(f"📝 [{timestamp}] [{level}] {msg}")
 
     except Exception as e:
         print(f"❌ Log Subscriber Error: {e}")
